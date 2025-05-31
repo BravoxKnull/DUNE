@@ -35,23 +35,72 @@ class WebRTCHandler {
             reconnectionDelay: 1000
         });
         this.usersInChannel = new Map();
+        this.audioContext = null;
+        this.audioAnalyzers = new Map();
         this.initializeSocketListeners();
     }
 
     async initialize() {
         try {
+            // Request audio with specific constraints for better quality
             this.localStream = await navigator.mediaDevices.getUserMedia({ 
                 audio: {
                     echoCancellation: true,
                     noiseSuppression: true,
-                    autoGainControl: true
+                    autoGainControl: true,
+                    channelCount: 1,
+                    sampleRate: 48000
                 }
             });
-            this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            console.log('Local stream initialized');
+            
+            // Initialize audio context for level monitoring
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const source = this.audioContext.createMediaStreamSource(this.localStream);
+            const analyzer = this.audioContext.createAnalyser();
+            analyzer.fftSize = 256;
+            source.connect(analyzer);
+            
+            // Store analyzer for local stream
+            this.audioAnalyzers.set(this.userId, analyzer);
+            
+            // Start monitoring audio levels
+            this.startAudioLevelMonitoring();
+            
+            console.log('Local stream initialized with audio processing');
         } catch (error) {
             console.error('Error accessing microphone:', error);
+            throw error;
         }
+    }
+
+    startAudioLevelMonitoring() {
+        const updateLevels = () => {
+            this.audioAnalyzers.forEach((analyzer, userId) => {
+                const dataArray = new Uint8Array(analyzer.frequencyBinCount);
+                analyzer.getByteFrequencyData(dataArray);
+                
+                // Calculate average volume
+                const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+                const isSpeaking = average > 20; // Adjust threshold as needed
+                
+                // Update speaking indicator
+                const userCard = document.querySelector(`[data-user-id="${userId}"]`);
+                if (userCard) {
+                    const indicator = userCard.querySelector('.speaking-indicator');
+                    if (indicator) {
+                        if (isSpeaking) {
+                            indicator.classList.add('active');
+                        } else {
+                            indicator.classList.remove('active');
+                        }
+                    }
+                }
+            });
+            
+            requestAnimationFrame(updateLevels);
+        };
+        
+        updateLevels();
     }
 
     initializeSocketListeners() {
@@ -255,6 +304,9 @@ class WebRTCHandler {
         // Handle connection state changes
         peerConnection.onconnectionstatechange = () => {
             console.log(`Connection state with ${userId}:`, peerConnection.connectionState);
+            if (peerConnection.connectionState === 'connected') {
+                console.log('Peer connection established with:', userId);
+            }
         };
 
         // Handle ICE connection state changes
@@ -268,13 +320,23 @@ class WebRTCHandler {
             const audioElement = document.createElement('audio');
             audioElement.srcObject = event.streams[0];
             audioElement.autoplay = true;
+            audioElement.id = `audio-${userId}`;
+            
+            // Remove any existing audio element for this user
+            const existingAudio = document.getElementById(`audio-${userId}`);
+            if (existingAudio) {
+                existingAudio.remove();
+            }
+            
             document.body.appendChild(audioElement);
 
-            // Update user card to show speaking
-            const userCard = document.querySelector(`[data-user-id="${userId}"]`);
-            if (userCard) {
-                userCard.classList.add('speaking');
-            }
+            // Set up audio analysis for remote stream
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioContext.createMediaStreamSource(event.streams[0]);
+            const analyzer = audioContext.createAnalyser();
+            analyzer.fftSize = 256;
+            source.connect(analyzer);
+            this.audioAnalyzers.set(userId, analyzer);
         };
 
         return peerConnection;
