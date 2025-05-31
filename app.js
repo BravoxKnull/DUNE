@@ -21,7 +21,20 @@ async function initializeWebRTC() {
     
     try {
         console.log('Initializing WebRTC handler...');
-        webrtcHandler = new WebRTCHandler(currentUser.id);
+        // Get user profile to get username
+        const { data: profile, error: profileError } = await supabase
+            .from('users')
+            .select('username')
+            .eq('id', currentUser.id)
+            .single();
+            
+        if (profileError) {
+            console.error('Error getting user profile:', profileError);
+            throw profileError;
+        }
+        
+        const username = profile?.username || currentUser.email || currentUser.id;
+        webrtcHandler = new WebRTCHandler(currentUser.id, username);
         await webrtcHandler.initialize();
         console.log('WebRTC handler initialized successfully');
     } catch (error) {
@@ -79,7 +92,11 @@ async function handleChannelClick(channelId) {
         // Update users list
         const usersList = document.getElementById('usersList');
         if (usersList) {
-            usersList.innerHTML = '<div class="user-card"><div class="user-icon">Y</div><span class="username">You</span></div>';
+            usersList.innerHTML = `<div class="user-card">
+                <div class="user-icon">Y</div>
+                <span class="username">You</span>
+                <div class="speaking-indicator"></div>
+            </div>`;
         }
     } catch (error) {
         console.error('Error handling channel click:', error);

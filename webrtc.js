@@ -39,6 +39,13 @@ class WebRTCHandler {
 
     async initialize() {
         try {
+            this.localStream = await navigator.mediaDevices.getUserMedia({ 
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
+            });
             this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
             console.log('Local stream initialized');
         } catch (error) {

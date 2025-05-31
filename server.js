@@ -14,7 +14,7 @@ const io = require('socket.io')(server, {
     pingInterval: 25000
 });
 
-// Store channel users
+// Store channel users with their usernames
 const channelUsers = new Map();
 
 // Serve static files
@@ -39,27 +39,32 @@ io.on('connection', (socket) => {
 
     // Handle joining a channel
     socket.on('join-channel', (data) => {
-        const { channelId, userId } = data;
+        const { channelId, userId, username } = data;
         
         // Add user to channel
         if (!channelUsers.has(channelId)) {
-            channelUsers.set(channelId, new Set());
+            channelUsers.set(channelId, new Map());
         }
-        channelUsers.get(channelId).add(userId);
+        channelUsers.get(channelId).set(userId, {
+            id: userId,
+            username: username || userId,
+            socketId: socket.id
+        });
         
         socket.join(channelId);
-        console.log(`User ${userId} joined channel ${channelId}`);
+        console.log(`User ${username || userId} joined channel ${channelId}`);
         
         // Send current channel users to the new user
         socket.emit('channel-users', {
             channelId,
-            users: Array.from(channelUsers.get(channelId))
+            users: Array.from(channelUsers.get(channelId).values())
         });
         
         // Notify others in the channel
         socket.to(channelId).emit('user-joined', {
             channelId,
-            userId
+            userId,
+            username: username || userId
         });
     });
 
@@ -69,27 +74,29 @@ io.on('connection', (socket) => {
         
         // Remove user from channel
         if (channelUsers.has(channelId)) {
+            const userData = channelUsers.get(channelId).get(userId);
             channelUsers.get(channelId).delete(userId);
             if (channelUsers.get(channelId).size === 0) {
                 channelUsers.delete(channelId);
             }
-        }
-        
-        socket.leave(channelId);
-        console.log(`User ${userId} left channel ${channelId}`);
-        
-        // Notify others in the channel
-        socket.to(channelId).emit('user-left', {
-            channelId,
-            userId
-        });
-        
-        // Update remaining users
-        if (channelUsers.has(channelId)) {
-            io.to(channelId).emit('channel-users', {
+            
+            socket.leave(channelId);
+            console.log(`User ${userData?.username || userId} left channel ${channelId}`);
+            
+            // Notify others in the channel
+            socket.to(channelId).emit('user-left', {
                 channelId,
-                users: Array.from(channelUsers.get(channelId))
+                userId,
+                username: userData?.username || userId
             });
+            
+            // Update remaining users
+            if (channelUsers.has(channelId)) {
+                io.to(channelId).emit('channel-users', {
+                    channelId,
+                    users: Array.from(channelUsers.get(channelId).values())
+                });
+            }
         }
     });
 
