@@ -71,8 +71,16 @@ class WebRTCHandler {
 
         this.socket.on('channel-users', (data) => {
             if (data.channelId === this.currentChannel) {
+                console.log('Received channel users:', data.users);
                 this.usersInChannel = new Set(data.users);
                 this.updateUsersList();
+                
+                // Create peer connections for all users in the channel
+                data.users.forEach(userId => {
+                    if (userId !== this.userId && !this.peers[userId]) {
+                        this.createPeerConnection(userId);
+                    }
+                });
             }
         });
 
@@ -88,7 +96,9 @@ class WebRTCHandler {
         const usersList = document.getElementById('usersList');
         if (!usersList) return;
 
+        console.log('Updating users list:', Array.from(this.usersInChannel));
         usersList.innerHTML = '';
+        
         this.usersInChannel.forEach(userId => {
             const userCard = document.createElement('div');
             userCard.className = 'user-card';

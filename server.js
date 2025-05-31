@@ -14,6 +14,9 @@ const io = require('socket.io')(server, {
     pingInterval: 25000
 });
 
+// Store channel users
+const channelUsers = new Map();
+
 // Serve static files
 app.use(express.static(__dirname));
 
@@ -37,8 +40,21 @@ io.on('connection', (socket) => {
     // Handle joining a channel
     socket.on('join-channel', (data) => {
         const { channelId, userId } = data;
+        
+        // Add user to channel
+        if (!channelUsers.has(channelId)) {
+            channelUsers.set(channelId, new Set());
+        }
+        channelUsers.get(channelId).add(userId);
+        
         socket.join(channelId);
         console.log(`User ${userId} joined channel ${channelId}`);
+        
+        // Send current channel users to the new user
+        socket.emit('channel-users', {
+            channelId,
+            users: Array.from(channelUsers.get(channelId))
+        });
         
         // Notify others in the channel
         socket.to(channelId).emit('user-joined', {
@@ -50,6 +66,15 @@ io.on('connection', (socket) => {
     // Handle leaving a channel
     socket.on('leave-channel', (data) => {
         const { channelId, userId } = data;
+        
+        // Remove user from channel
+        if (channelUsers.has(channelId)) {
+            channelUsers.get(channelId).delete(userId);
+            if (channelUsers.get(channelId).size === 0) {
+                channelUsers.delete(channelId);
+            }
+        }
+        
         socket.leave(channelId);
         console.log(`User ${userId} left channel ${channelId}`);
         
@@ -58,6 +83,14 @@ io.on('connection', (socket) => {
             channelId,
             userId
         });
+        
+        // Update remaining users
+        if (channelUsers.has(channelId)) {
+            io.to(channelId).emit('channel-users', {
+                channelId,
+                users: Array.from(channelUsers.get(channelId))
+            });
+        }
     });
 
     // Handle WebRTC signaling
@@ -71,6 +104,25 @@ io.on('connection', (socket) => {
     // Handle disconnection
     socket.on('disconnect', () => {
         console.log('User disconnected:', socket.id);
+        
+        // Remove user from all channels
+        channelUsers.forEach((users, channelId) => {
+            if (users.has(socket.id)) {
+                users.delete(socket.id);
+                if (users.size === 0) {
+                    channelUsers.delete(channelId);
+                } else {
+                    io.to(channelId).emit('user-left', {
+                        channelId,
+                        userId: socket.id
+                    });
+                    io.to(channelId).emit('channel-users', {
+                        channelId,
+                        users: Array.from(users)
+                    });
+                }
+            }
+        });
     });
 });
 
