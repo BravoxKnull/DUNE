@@ -59,7 +59,8 @@ class WebRTCHandler {
                     googAutoGainControl: true,
                     googNoiseSuppression: true,
                     googHighpassFilter: true
-                }
+                },
+                video: false
             });
             
             // Initialize audio context for level monitoring
@@ -135,6 +136,15 @@ class WebRTCHandler {
                 this.usersInChannel.delete(data.userId);
                 this.updateUsersList();
                 this.removePeer(data.userId);
+                
+                // Remove remote stream and audio element
+                const audioElement = document.getElementById(`audio-${data.userId}`);
+                if (audioElement) {
+                    audioElement.srcObject = null;
+                    audioElement.remove();
+                }
+                this.remoteStreams.delete(data.userId);
+                this.audioAnalyzers.delete(data.userId);
             }
         });
 
@@ -230,11 +240,6 @@ class WebRTCHandler {
             username: this.username
         });
 
-        // Request current users in channel
-        this.socket.emit('get-channel-users', {
-            channelId: channelId
-        });
-
         // Update UI immediately to show you're in the channel
         this.usersInChannel.set(this.userId, {
             id: this.userId,
@@ -264,8 +269,20 @@ class WebRTCHandler {
         Object.values(this.peers).forEach(peer => {
             peer.close();
         });
+        
+        // Clean up all remote streams and audio elements
+        this.remoteStreams.forEach((stream, userId) => {
+            const audioElement = document.getElementById(`audio-${userId}`);
+            if (audioElement) {
+                audioElement.srcObject = null;
+                audioElement.remove();
+            }
+        });
+        
         this.peers = {};
         this.usersInChannel.clear();
+        this.remoteStreams.clear();
+        this.audioAnalyzers.clear();
 
         // Update UI
         const currentChannelName = document.getElementById('currentChannelName');
@@ -295,18 +312,7 @@ class WebRTCHandler {
         if (this.localStream) {
             this.localStream.getTracks().forEach(track => {
                 console.log('Adding local track to peer connection:', track.kind);
-                const sender = peerConnection.addTrack(track, this.localStream);
-                
-                // Set track parameters
-                if (sender.track.kind === 'audio') {
-                    const params = sender.getParameters();
-                    if (!params.encodings) {
-                        params.encodings = [{}];
-                    }
-                    params.encodings[0].maxBitrate = 128000; // 128 kbps
-                    params.encodings[0].dtx = true; // Discontinuous transmission
-                    sender.setParameters(params);
-                }
+                peerConnection.addTrack(track, this.localStream);
             });
         }
 
@@ -329,11 +335,19 @@ class WebRTCHandler {
             if (peerConnection.connectionState === 'connected') {
                 console.log('Peer connection established with:', userId);
             }
+            if (peerConnection.connectionState === 'disconnected' || 
+                peerConnection.connectionState === 'failed') {
+                this.removePeer(userId);
+            }
         };
 
         // Handle ICE connection state changes
         peerConnection.oniceconnectionstatechange = () => {
             console.log(`ICE connection state with ${userId}:`, peerConnection.iceConnectionState);
+            if (peerConnection.iceConnectionState === 'disconnected' || 
+                peerConnection.iceConnectionState === 'failed') {
+                this.removePeer(userId);
+            }
         };
 
         // Handle incoming tracks
@@ -348,7 +362,9 @@ class WebRTCHandler {
             }
             
             // Add track to remote stream
-            remoteStream.addTrack(event.track);
+            if (!remoteStream.getTracks().some(t => t.id === event.track.id)) {
+                remoteStream.addTrack(event.track);
+            }
             
             // Create or update audio element
             let audioElement = document.getElementById(`audio-${userId}`);
@@ -357,50 +373,29 @@ class WebRTCHandler {
                 audioElement.id = `audio-${userId}`;
                 audioElement.autoplay = true;
                 audioElement.playsInline = true;
-                audioElement.volume = 1.0; // Ensure volume is at maximum
+                audioElement.volume = 1.0;
                 document.body.appendChild(audioElement);
             }
             
             // Set the stream
-            audioElement.srcObject = remoteStream;
+            if (audioElement.srcObject !== remoteStream) {
+                audioElement.srcObject = remoteStream;
+            }
             
             // Set up audio analysis for remote stream
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const source = audioContext.createMediaStreamSource(remoteStream);
-            const analyzer = audioContext.createAnalyser();
-            analyzer.fftSize = 256;
-            source.connect(analyzer);
-            this.audioAnalyzers.set(userId, analyzer);
+            if (!this.audioAnalyzers.has(userId)) {
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const source = audioContext.createMediaStreamSource(remoteStream);
+                const analyzer = audioContext.createAnalyser();
+                analyzer.fftSize = 256;
+                source.connect(analyzer);
+                this.audioAnalyzers.set(userId, analyzer);
+            }
             
-            // Log audio element state
-            audioElement.onloadedmetadata = () => {
-                console.log('Audio element loaded metadata for:', userId);
-                audioElement.play().catch(error => {
-                    console.error('Error playing audio:', error);
-                });
-            };
-
-            // Monitor audio levels for speaking indicator
-            const updateSpeakingIndicator = () => {
-                const dataArray = new Uint8Array(analyzer.frequencyBinCount);
-                analyzer.getByteFrequencyData(dataArray);
-                const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
-                const isSpeaking = average > 15;
-
-                const userCard = document.querySelector(`[data-user-id="${userId}"]`);
-                if (userCard) {
-                    const indicator = userCard.querySelector('.speaking-indicator');
-                    if (indicator) {
-                        if (isSpeaking) {
-                            indicator.classList.add('active');
-                        } else {
-                            indicator.classList.remove('active');
-                        }
-                    }
-                }
-                requestAnimationFrame(updateSpeakingIndicator);
-            };
-            updateSpeakingIndicator();
+            // Play the audio
+            audioElement.play().catch(error => {
+                console.error('Error playing audio:', error);
+            });
         };
 
         return peerConnection;
@@ -415,14 +410,12 @@ class WebRTCHandler {
         console.log('Handling signal:', type, 'from:', from);
 
         try {
+            const peerConnection = this.peers[from] || await this.createPeerConnection(from);
+
             if (type === 'offer') {
-                const peerConnection = await this.createPeerConnection(from);
-                
-                // Set remote description first
                 await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
                 console.log('Set remote description for offer from:', from);
                 
-                // Create and set local description
                 const answer = await peerConnection.createAnswer();
                 await peerConnection.setLocalDescription(answer);
                 console.log('Created and set local answer for:', from);
@@ -435,21 +428,15 @@ class WebRTCHandler {
                 });
             }
             else if (type === 'answer') {
-                const peerConnection = this.peers[from];
-                if (peerConnection && peerConnection.signalingState === 'have-local-offer') {
-                    await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
-                    console.log('Set remote description for answer from:', from);
-                }
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+                console.log('Set remote description for answer from:', from);
             }
             else if (type === 'candidate') {
-                const peerConnection = this.peers[from];
-                if (peerConnection) {
-                    try {
-                        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-                        console.log('Added ICE candidate from:', from);
-                    } catch (error) {
-                        console.error('Error adding ICE candidate:', error);
-                    }
+                try {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                    console.log('Added ICE candidate from:', from);
+                } catch (error) {
+                    console.error('Error adding ICE candidate:', error);
                 }
             }
         } catch (error) {
@@ -466,6 +453,7 @@ class WebRTCHandler {
                 offerToReceiveAudio: true,
                 offerToReceiveVideo: false
             });
+            
             await peerConnection.setLocalDescription(offer);
             console.log('Created and set local offer for:', userId);
             
@@ -488,9 +476,18 @@ class WebRTCHandler {
         if (this.peers[userId]) {
             this.peers[userId].close();
             delete this.peers[userId];
+            
+            // Clean up remote stream and audio element
+            const audioElement = document.getElementById(`audio-${userId}`);
+            if (audioElement) {
+                audioElement.srcObject = null;
+                audioElement.remove();
+            }
+            this.remoteStreams.delete(userId);
+            this.audioAnalyzers.delete(userId);
         }
     }
 }
 
 // Export the class for use in app.js
-window.WebRTCHandler = WebRTCHandler; 
+window.WebRTCHandler = WebRTCHandler;
