@@ -37,6 +37,7 @@ class WebRTCHandler {
         this.usersInChannel = new Map();
         this.audioContext = null;
         this.audioAnalyzers = new Map();
+        this.remoteStreams = new Map();
         this.initializeSocketListeners();
     }
 
@@ -285,6 +286,7 @@ class WebRTCHandler {
         // Add local stream
         if (this.localStream) {
             this.localStream.getTracks().forEach(track => {
+                console.log('Adding local track to peer connection:', track.kind);
                 peerConnection.addTrack(track, this.localStream);
             });
         }
@@ -292,6 +294,7 @@ class WebRTCHandler {
         // Handle ICE candidates
         peerConnection.onicecandidate = (event) => {
             if (event.candidate) {
+                console.log('Sending ICE candidate to:', userId);
                 this.sendSignal({
                     type: 'candidate',
                     candidate: event.candidate,
@@ -316,27 +319,46 @@ class WebRTCHandler {
 
         // Handle incoming tracks
         peerConnection.ontrack = (event) => {
-            console.log('Received track from:', userId);
-            const audioElement = document.createElement('audio');
-            audioElement.srcObject = event.streams[0];
-            audioElement.autoplay = true;
-            audioElement.id = `audio-${userId}`;
+            console.log('Received track from:', userId, 'Track kind:', event.track.kind);
             
-            // Remove any existing audio element for this user
-            const existingAudio = document.getElementById(`audio-${userId}`);
-            if (existingAudio) {
-                existingAudio.remove();
+            // Get or create remote stream
+            let remoteStream = this.remoteStreams.get(userId);
+            if (!remoteStream) {
+                remoteStream = new MediaStream();
+                this.remoteStreams.set(userId, remoteStream);
             }
             
-            document.body.appendChild(audioElement);
-
+            // Add track to remote stream
+            remoteStream.addTrack(event.track);
+            
+            // Create or update audio element
+            let audioElement = document.getElementById(`audio-${userId}`);
+            if (!audioElement) {
+                audioElement = document.createElement('audio');
+                audioElement.id = `audio-${userId}`;
+                audioElement.autoplay = true;
+                audioElement.playsInline = true;
+                document.body.appendChild(audioElement);
+            }
+            
+            // Set the stream
+            audioElement.srcObject = remoteStream;
+            
             // Set up audio analysis for remote stream
             const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const source = audioContext.createMediaStreamSource(event.streams[0]);
+            const source = audioContext.createMediaStreamSource(remoteStream);
             const analyzer = audioContext.createAnalyser();
             analyzer.fftSize = 256;
             source.connect(analyzer);
             this.audioAnalyzers.set(userId, analyzer);
+            
+            // Log audio element state
+            audioElement.onloadedmetadata = () => {
+                console.log('Audio element loaded metadata for:', userId);
+                audioElement.play().catch(error => {
+                    console.error('Error playing audio:', error);
+                });
+            };
         };
 
         return peerConnection;
@@ -356,10 +378,12 @@ class WebRTCHandler {
                 
                 // Set remote description first
                 await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+                console.log('Set remote description for offer from:', from);
                 
                 // Create and set local description
                 const answer = await peerConnection.createAnswer();
                 await peerConnection.setLocalDescription(answer);
+                console.log('Created and set local answer for:', from);
                 
                 this.sendSignal({
                     type: 'answer',
@@ -372,6 +396,7 @@ class WebRTCHandler {
                 const peerConnection = this.peers[from];
                 if (peerConnection && peerConnection.signalingState === 'have-local-offer') {
                     await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+                    console.log('Set remote description for answer from:', from);
                 }
             }
             else if (type === 'candidate') {
@@ -379,6 +404,7 @@ class WebRTCHandler {
                 if (peerConnection) {
                     try {
                         await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                        console.log('Added ICE candidate from:', from);
                     } catch (error) {
                         console.error('Error adding ICE candidate:', error);
                     }
@@ -394,8 +420,12 @@ class WebRTCHandler {
         const peerConnection = await this.createPeerConnection(userId);
         
         try {
-            const offer = await peerConnection.createOffer();
+            const offer = await peerConnection.createOffer({
+                offerToReceiveAudio: true,
+                offerToReceiveVideo: false
+            });
             await peerConnection.setLocalDescription(offer);
+            console.log('Created and set local offer for:', userId);
             
             this.sendSignal({
                 type: 'offer',
