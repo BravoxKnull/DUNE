@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DUNE - Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body class="dashboard-body">
+    <div class="dashboard-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">
+                <h1>DUNE</h1>
+                <div class="logo-glow"></div>
+            </div>
+            
+            <div class="user-info">
+                <span id="username">Loading...</span>
+                <button id="logoutBtn" class="glow-btn">Logout</button>
+            </div>
+
+            <div class="channels-section">
+                <h2>Voice Channels</h2>
+                <button id="createChannelBtn" class="glow-btn">+ Create Channel</button>
+                <div id="channelsList" class="channels-list">
+                    <!-- Channels will be populated here -->
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="current-channel">
+                <h2 id="currentChannelName">No Channel Selected</h2>
+                <div class="channel-status">
+                    <span id="connectionStatus">Disconnected</span>
+                    <div class="status-indicator"></div>
+                </div>
+            </div>
+
+            <div class="voice-controls">
+                <button id="joinChannelBtn" class="glow-btn" disabled>Join Channel</button>
+                <button id="leaveChannelBtn" class="glow-btn" disabled>Leave Channel</button>
+                <button id="muteBtn" class="glow-btn" disabled>
+                    <span class="btn-text">Mute</span>
+                </button>
+            </div>
+
+            <div class="users-list">
+                <h3>Users in Channel</h3>
+                <div id="usersList" class="users-grid">
+                    <!-- Users will be populated here -->
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Create Channel Modal -->
+    <div id="createChannelModal" class="modal">
+        <div class="modal-content">
+            <h2>Create New Channel</h2>
+            <form id="createChannelForm">
+                <div class="form-group">
+                    <input type="text" id="channelName" required placeholder="Channel Name">
+                    <div class="input-glow"></div>
+                </div>
+                <div class="modal-buttons">
+                    <button type="submit" class="glow-btn">Create</button>
+                    <button type="button" class="glow-btn cancel-btn">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+    <script src="webrtc.js"></script>
+</body>
+</html> 
