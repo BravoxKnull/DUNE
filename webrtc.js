@@ -29,7 +29,18 @@ class WebRTCHandler {
         try {
             // Request audio with basic constraints
             this.localStream = await navigator.mediaDevices.getUserMedia({ 
-                audio: true
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                    channelCount: 1,
+                    sampleRate: 48000,
+                    latency: 0,
+                    googEchoCancellation: true,
+                    googAutoGainControl: true,
+                    googNoiseSuppression: true,
+                    googHighpassFilter: true
+                }
             });
             
             // Initialize audio context for level monitoring
@@ -67,11 +78,7 @@ class WebRTCHandler {
                 if (userCard) {
                     const indicator = userCard.querySelector('.speaking-indicator');
                     if (indicator) {
-                        if (isSpeaking) {
-                            indicator.classList.add('active');
-                        } else {
-                            indicator.classList.remove('active');
-                        }
+                        indicator.classList.toggle('active', isSpeaking);
                     }
                 }
             });
@@ -105,6 +112,15 @@ class WebRTCHandler {
                 this.usersInChannel.delete(data.userId);
                 this.updateUsersList();
                 this.removePeer(data.userId);
+                
+                // Clean up audio elements
+                const audioElement = document.getElementById(`audio-${data.userId}`);
+                if (audioElement) {
+                    audioElement.srcObject = null;
+                    audioElement.remove();
+                }
+                this.remoteStreams.delete(data.userId);
+                this.audioAnalyzers.delete(data.userId);
             }
         });
 
@@ -135,7 +151,6 @@ class WebRTCHandler {
         const usersList = document.getElementById('usersList');
         if (!usersList) return;
 
-        console.log('Updating users list:', Array.from(this.usersInChannel.values()));
         usersList.innerHTML = '';
         
         // Add current user first
@@ -161,7 +176,7 @@ class WebRTCHandler {
         
         // Add other users
         this.usersInChannel.forEach((userData, userId) => {
-            if (userId === this.userId) return; // Skip current user
+            if (userId === this.userId) return;
             
             const userCard = document.createElement('div');
             userCard.className = 'user-card';
@@ -200,12 +215,7 @@ class WebRTCHandler {
             username: this.username
         });
 
-        // Request current users in channel
-        this.socket.emit('get-channel-users', {
-            channelId: channelId
-        });
-
-        // Update UI immediately to show you're in the channel
+        // Update UI immediately
         this.usersInChannel.set(this.userId, {
             id: this.userId,
             username: this.username
@@ -234,8 +244,20 @@ class WebRTCHandler {
         Object.values(this.peers).forEach(peer => {
             peer.close();
         });
+        
+        // Clean up all remote streams and audio elements
+        this.remoteStreams.forEach((stream, userId) => {
+            const audioElement = document.getElementById(`audio-${userId}`);
+            if (audioElement) {
+                audioElement.srcObject = null;
+                audioElement.remove();
+            }
+        });
+        
         this.peers = {};
         this.usersInChannel.clear();
+        this.remoteStreams.clear();
+        this.audioAnalyzers.clear();
 
         // Update UI
         const currentChannelName = document.getElementById('currentChannelName');
@@ -285,11 +307,18 @@ class WebRTCHandler {
         // Handle connection state changes
         peerConnection.onconnectionstatechange = () => {
             console.log(`Connection state with ${userId}:`, peerConnection.connectionState);
+            if (peerConnection.connectionState === 'connected') {
+                console.log('Peer connection established with:', userId);
+            }
         };
 
         // Handle ICE connection state changes
         peerConnection.oniceconnectionstatechange = () => {
             console.log(`ICE connection state with ${userId}:`, peerConnection.iceConnectionState);
+            if (peerConnection.iceConnectionState === 'disconnected' || 
+                peerConnection.iceConnectionState === 'failed') {
+                this.removePeer(userId);
+            }
         };
 
         // Handle incoming tracks
@@ -303,8 +332,10 @@ class WebRTCHandler {
                 this.remoteStreams.set(userId, remoteStream);
             }
             
-            // Add track to remote stream
-            remoteStream.addTrack(event.track);
+            // Add track to remote stream if not already present
+            if (!remoteStream.getTracks().some(t => t.id === event.track.id)) {
+                remoteStream.addTrack(event.track);
+            }
             
             // Create or update audio element
             let audioElement = document.getElementById(`audio-${userId}`);
@@ -317,16 +348,20 @@ class WebRTCHandler {
                 document.body.appendChild(audioElement);
             }
             
-            // Set the stream
-            audioElement.srcObject = remoteStream;
+            // Set the stream if it's different
+            if (audioElement.srcObject !== remoteStream) {
+                audioElement.srcObject = remoteStream;
+            }
             
-            // Set up audio analysis for remote stream
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const source = audioContext.createMediaStreamSource(remoteStream);
-            const analyzer = audioContext.createAnalyser();
-            analyzer.fftSize = 256;
-            source.connect(analyzer);
-            this.audioAnalyzers.set(userId, analyzer);
+            // Set up audio analysis if not already done
+            if (!this.audioAnalyzers.has(userId)) {
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const source = audioContext.createMediaStreamSource(remoteStream);
+                const analyzer = audioContext.createAnalyser();
+                analyzer.fftSize = 256;
+                source.connect(analyzer);
+                this.audioAnalyzers.set(userId, analyzer);
+            }
             
             // Log audio element state
             audioElement.onloadedmetadata = () => {
@@ -335,6 +370,28 @@ class WebRTCHandler {
                     console.error('Error playing audio:', error);
                 });
             };
+
+            // Monitor audio levels for speaking indicator
+            const updateSpeakingIndicator = () => {
+                const dataArray = new Uint8Array(analyzer.frequencyBinCount);
+                analyzer.getByteFrequencyData(dataArray);
+                const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+                const isSpeaking = average > 15;
+
+                const userCard = document.querySelector(`[data-user-id="${userId}"]`);
+                if (userCard) {
+                    const indicator = userCard.querySelector('.speaking-indicator');
+                    if (indicator) {
+                        if (isSpeaking) {
+                            indicator.classList.add('active');
+                        } else {
+                            indicator.classList.remove('active');
+                        }
+                    }
+                }
+                requestAnimationFrame(updateSpeakingIndicator);
+            };
+            updateSpeakingIndicator();
         };
 
         return peerConnection;
@@ -350,9 +407,15 @@ class WebRTCHandler {
         try {
             if (type === 'offer') {
                 const peerConnection = await this.createPeerConnection(from);
+                
+                // Set remote description first
                 await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+                console.log('Set remote description for offer from:', from);
+                
+                // Create and set local description
                 const answer = await peerConnection.createAnswer();
                 await peerConnection.setLocalDescription(answer);
+                console.log('Created and set local answer for:', from);
                 
                 this.sendSignal({
                     type: 'answer',
@@ -363,14 +426,20 @@ class WebRTCHandler {
             }
             else if (type === 'answer') {
                 const peerConnection = this.peers[from];
-                if (peerConnection) {
+                if (peerConnection && peerConnection.signalingState === 'have-local-offer') {
                     await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+                    console.log('Set remote description for answer from:', from);
                 }
             }
             else if (type === 'candidate') {
                 const peerConnection = this.peers[from];
                 if (peerConnection) {
-                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                    try {
+                        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                        console.log('Added ICE candidate from:', from);
+                    } catch (error) {
+                        console.error('Error adding ICE candidate:', error);
+                    }
                 }
             }
         } catch (error) {
@@ -383,7 +452,10 @@ class WebRTCHandler {
         const peerConnection = await this.createPeerConnection(userId);
         
         try {
-            const offer = await peerConnection.createOffer();
+            const offer = await peerConnection.createOffer({
+                offerToReceiveAudio: true,
+                offerToReceiveVideo: false
+            });
             await peerConnection.setLocalDescription(offer);
             
             this.sendSignal({
@@ -405,9 +477,18 @@ class WebRTCHandler {
         if (this.peers[userId]) {
             this.peers[userId].close();
             delete this.peers[userId];
+            
+            // Clean up audio elements
+            const audioElement = document.getElementById(`audio-${userId}`);
+            if (audioElement) {
+                audioElement.srcObject = null;
+                audioElement.remove();
+            }
+            this.remoteStreams.delete(userId);
+            this.audioAnalyzers.delete(userId);
         }
     }
 }
 
 // Export the class for use in app.js
-window.WebRTCHandler = WebRTCHandler; 
+window.WebRTCHandler = WebRTCHandler;
