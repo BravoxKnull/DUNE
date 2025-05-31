@@ -91,18 +91,14 @@ class WebRTCHandler {
                 
                 // Calculate average volume
                 const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
-                const isSpeaking = average > 15; // Lowered threshold for better sensitivity
+                const isSpeaking = average > 15;
                 
                 // Update speaking indicator
                 const userCard = document.querySelector(`[data-user-id="${userId}"]`);
                 if (userCard) {
                     const indicator = userCard.querySelector('.speaking-indicator');
                     if (indicator) {
-                        if (isSpeaking) {
-                            indicator.classList.add('active');
-                        } else {
-                            indicator.classList.remove('active');
-                        }
+                        indicator.classList.toggle('active', isSpeaking);
                     }
                 }
             });
@@ -137,7 +133,7 @@ class WebRTCHandler {
                 this.updateUsersList();
                 this.removePeer(data.userId);
                 
-                // Remove remote stream and audio element
+                // Clean up audio elements
                 const audioElement = document.getElementById(`audio-${data.userId}`);
                 if (audioElement) {
                     audioElement.srcObject = null;
@@ -175,7 +171,6 @@ class WebRTCHandler {
         const usersList = document.getElementById('usersList');
         if (!usersList) return;
 
-        console.log('Updating users list:', Array.from(this.usersInChannel.values()));
         usersList.innerHTML = '';
         
         // Add current user first
@@ -201,7 +196,7 @@ class WebRTCHandler {
         
         // Add other users
         this.usersInChannel.forEach((userData, userId) => {
-            if (userId === this.userId) return; // Skip current user
+            if (userId === this.userId) return;
             
             const userCard = document.createElement('div');
             userCard.className = 'user-card';
@@ -240,7 +235,7 @@ class WebRTCHandler {
             username: this.username
         });
 
-        // Update UI immediately to show you're in the channel
+        // Update UI immediately
         this.usersInChannel.set(this.userId, {
             id: this.userId,
             username: this.username
@@ -361,7 +356,7 @@ class WebRTCHandler {
                 this.remoteStreams.set(userId, remoteStream);
             }
             
-            // Add track to remote stream
+            // Add track to remote stream if not already present
             if (!remoteStream.getTracks().some(t => t.id === event.track.id)) {
                 remoteStream.addTrack(event.track);
             }
@@ -377,12 +372,12 @@ class WebRTCHandler {
                 document.body.appendChild(audioElement);
             }
             
-            // Set the stream
+            // Set the stream if it's different
             if (audioElement.srcObject !== remoteStream) {
                 audioElement.srcObject = remoteStream;
             }
             
-            // Set up audio analysis for remote stream
+            // Set up audio analysis if not already done
             if (!this.audioAnalyzers.has(userId)) {
                 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 const source = audioContext.createMediaStreamSource(remoteStream);
@@ -410,34 +405,45 @@ class WebRTCHandler {
         console.log('Handling signal:', type, 'from:', from);
 
         try {
-            const peerConnection = this.peers[from] || await this.createPeerConnection(from);
+            if (!this.peers[from]) {
+                await this.createPeerConnection(from);
+            }
+            const peerConnection = this.peers[from];
 
-            if (type === 'offer') {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
-                console.log('Set remote description for offer from:', from);
-                
-                const answer = await peerConnection.createAnswer();
-                await peerConnection.setLocalDescription(answer);
-                console.log('Created and set local answer for:', from);
-                
-                this.sendSignal({
-                    type: 'answer',
-                    sdp: answer,
-                    to: from,
-                    channelId: this.currentChannel
-                });
-            }
-            else if (type === 'answer') {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
-                console.log('Set remote description for answer from:', from);
-            }
-            else if (type === 'candidate') {
-                try {
-                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-                    console.log('Added ICE candidate from:', from);
-                } catch (error) {
-                    console.error('Error adding ICE candidate:', error);
-                }
+            switch (type) {
+                case 'offer':
+                    if (peerConnection.signalingState !== 'stable') {
+                        console.log('Cannot handle offer, signaling state is:', peerConnection.signalingState);
+                        return;
+                    }
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+                    this.sendSignal({
+                        type: 'answer',
+                        sdp: answer,
+                        to: from,
+                        channelId: this.currentChannel
+                    });
+                    break;
+
+                case 'answer':
+                    if (peerConnection.signalingState !== 'have-local-offer') {
+                        console.log('Cannot handle answer, signaling state is:', peerConnection.signalingState);
+                        return;
+                    }
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+                    break;
+
+                case 'candidate':
+                    if (candidate) {
+                        try {
+                            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                        } catch (error) {
+                            console.error('Error adding ICE candidate:', error);
+                        }
+                    }
+                    break;
             }
         } catch (error) {
             console.error('Error handling signal:', error);
@@ -449,13 +455,17 @@ class WebRTCHandler {
         const peerConnection = await this.createPeerConnection(userId);
         
         try {
+            if (peerConnection.signalingState !== 'stable') {
+                console.log('Cannot create offer, signaling state is:', peerConnection.signalingState);
+                return;
+            }
+
             const offer = await peerConnection.createOffer({
                 offerToReceiveAudio: true,
                 offerToReceiveVideo: false
             });
             
             await peerConnection.setLocalDescription(offer);
-            console.log('Created and set local offer for:', userId);
             
             this.sendSignal({
                 type: 'offer',
@@ -477,7 +487,7 @@ class WebRTCHandler {
             this.peers[userId].close();
             delete this.peers[userId];
             
-            // Clean up remote stream and audio element
+            // Clean up audio elements
             const audioElement = document.getElementById(`audio-${userId}`);
             if (audioElement) {
                 audioElement.srcObject = null;
