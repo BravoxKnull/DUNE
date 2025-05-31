@@ -16,6 +16,7 @@ const io = require('socket.io')(server, {
 
 // Store channel users with their usernames
 const channelUsers = new Map();
+const socketToUser = new Map();
 
 // Serve static files
 app.use(express.static(__dirname));
@@ -40,6 +41,9 @@ io.on('connection', (socket) => {
     // Handle joining a channel
     socket.on('join-channel', (data) => {
         const { channelId, userId, username } = data;
+        
+        // Store socket to user mapping
+        socketToUser.set(socket.id, { userId, username });
         
         // Add user to channel
         if (!channelUsers.has(channelId)) {
@@ -102,34 +106,46 @@ io.on('connection', (socket) => {
 
     // Handle WebRTC signaling
     socket.on('signal', (data) => {
-        socket.to(data.channelId).emit('signal', {
-            ...data,
-            from: socket.id
-        });
+        const { to, channelId } = data;
+        const targetUser = Array.from(channelUsers.get(channelId)?.values() || [])
+            .find(user => user.id === to);
+        
+        if (targetUser) {
+            io.to(targetUser.socketId).emit('signal', {
+                ...data,
+                from: socketToUser.get(socket.id)?.userId
+            });
+        }
     });
 
     // Handle disconnection
     socket.on('disconnect', () => {
         console.log('User disconnected:', socket.id);
+        const userData = socketToUser.get(socket.id);
         
-        // Remove user from all channels
-        channelUsers.forEach((users, channelId) => {
-            if (users.has(socket.id)) {
-                users.delete(socket.id);
-                if (users.size === 0) {
-                    channelUsers.delete(channelId);
-                } else {
-                    io.to(channelId).emit('user-left', {
-                        channelId,
-                        userId: socket.id
-                    });
-                    io.to(channelId).emit('channel-users', {
-                        channelId,
-                        users: Array.from(users)
-                    });
+        if (userData) {
+            // Remove user from all channels
+            channelUsers.forEach((users, channelId) => {
+                if (users.has(userData.userId)) {
+                    users.delete(userData.userId);
+                    if (users.size === 0) {
+                        channelUsers.delete(channelId);
+                    } else {
+                        io.to(channelId).emit('user-left', {
+                            channelId,
+                            userId: userData.userId,
+                            username: userData.username
+                        });
+                        io.to(channelId).emit('channel-users', {
+                            channelId,
+                            users: Array.from(users.values())
+                        });
+                    }
                 }
-            }
-        });
+            });
+            
+            socketToUser.delete(socket.id);
+        }
     });
 });
 

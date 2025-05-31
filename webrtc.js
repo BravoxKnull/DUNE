@@ -125,7 +125,7 @@ class WebRTCHandler {
                     username: data.username || data.userId
                 });
                 this.updateUsersList();
-                await this.createPeerConnection(data.userId);
+                await this.initiateCall(data.userId);
             }
         });
 
