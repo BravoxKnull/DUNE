@@ -17,7 +17,10 @@ const configuration = {
             urls: 'stun:stun4.l.google.com:19302'
         }
     ],
-    iceCandidatePoolSize: 10
+    iceCandidatePoolSize: 10,
+    bundlePolicy: 'max-bundle',
+    rtcpMuxPolicy: 'require',
+    iceTransportPolicy: 'all'
 };
 
 class WebRTCHandler {
@@ -50,7 +53,12 @@ class WebRTCHandler {
                     noiseSuppression: true,
                     autoGainControl: true,
                     channelCount: 1,
-                    sampleRate: 48000
+                    sampleRate: 48000,
+                    latency: 0,
+                    googEchoCancellation: true,
+                    googAutoGainControl: true,
+                    googNoiseSuppression: true,
+                    googHighpassFilter: true
                 }
             });
             
@@ -287,7 +295,18 @@ class WebRTCHandler {
         if (this.localStream) {
             this.localStream.getTracks().forEach(track => {
                 console.log('Adding local track to peer connection:', track.kind);
-                peerConnection.addTrack(track, this.localStream);
+                const sender = peerConnection.addTrack(track, this.localStream);
+                
+                // Set track parameters
+                if (sender.track.kind === 'audio') {
+                    const params = sender.getParameters();
+                    if (!params.encodings) {
+                        params.encodings = [{}];
+                    }
+                    params.encodings[0].maxBitrate = 128000; // 128 kbps
+                    params.encodings[0].dtx = true; // Discontinuous transmission
+                    sender.setParameters(params);
+                }
             });
         }
 
