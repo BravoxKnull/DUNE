@@ -21,8 +21,9 @@ const configuration = {
 };
 
 class WebRTCHandler {
-    constructor(userId) {
+    constructor(userId, username) {
         this.userId = userId;
+        this.username = username;
         this.peers = {};
         this.localStream = null;
         this.currentChannel = null;
@@ -33,7 +34,7 @@ class WebRTCHandler {
             reconnectionAttempts: 5,
             reconnectionDelay: 1000
         });
-        this.usersInChannel = new Set();
+        this.usersInChannel = new Map();
         this.initializeSocketListeners();
     }
 
@@ -61,7 +62,10 @@ class WebRTCHandler {
         this.socket.on('user-joined', async (data) => {
             if (data.channelId === this.currentChannel) {
                 console.log('User joined:', data.userId);
-                this.usersInChannel.add(data.userId);
+                this.usersInChannel.set(data.userId, {
+                    id: data.userId,
+                    username: data.username || data.userId
+                });
                 this.updateUsersList();
                 await this.createPeerConnection(data.userId);
             }
@@ -79,13 +83,13 @@ class WebRTCHandler {
         this.socket.on('channel-users', (data) => {
             if (data.channelId === this.currentChannel) {
                 console.log('Received channel users:', data.users);
-                this.usersInChannel = new Set(data.users);
+                this.usersInChannel = new Map(data.users.map(user => [user.id, user]));
                 this.updateUsersList();
                 
                 // Create peer connections for all users in the channel
-                data.users.forEach(userId => {
-                    if (userId !== this.userId && !this.peers[userId]) {
-                        this.initiateCall(userId);
+                data.users.forEach(user => {
+                    if (user.id !== this.userId && !this.peers[user.id]) {
+                        this.initiateCall(user.id);
                     }
                 });
             }
@@ -103,25 +107,46 @@ class WebRTCHandler {
         const usersList = document.getElementById('usersList');
         if (!usersList) return;
 
-        console.log('Updating users list:', Array.from(this.usersInChannel));
+        console.log('Updating users list:', Array.from(this.usersInChannel.values()));
         usersList.innerHTML = '';
         
-        this.usersInChannel.forEach(userId => {
+        // Add current user first
+        const currentUserCard = document.createElement('div');
+        currentUserCard.className = 'user-card';
+        currentUserCard.dataset.userId = this.userId;
+        
+        const currentUserIcon = document.createElement('div');
+        currentUserIcon.className = 'user-icon';
+        currentUserIcon.textContent = this.username.charAt(0).toUpperCase();
+        
+        const currentUsername = document.createElement('span');
+        currentUsername.className = 'username';
+        currentUsername.textContent = 'You';
+        
+        const currentSpeakingIndicator = document.createElement('div');
+        currentSpeakingIndicator.className = 'speaking-indicator';
+        
+        currentUserCard.appendChild(currentUserIcon);
+        currentUserCard.appendChild(currentUsername);
+        currentUserCard.appendChild(currentSpeakingIndicator);
+        usersList.appendChild(currentUserCard);
+        
+        // Add other users
+        this.usersInChannel.forEach((userData, userId) => {
+            if (userId === this.userId) return; // Skip current user
+            
             const userCard = document.createElement('div');
             userCard.className = 'user-card';
             userCard.dataset.userId = userId;
             
-            // Add user avatar/icon
             const userIcon = document.createElement('div');
             userIcon.className = 'user-icon';
-            userIcon.textContent = userId.charAt(0).toUpperCase();
+            userIcon.textContent = userData.username.charAt(0).toUpperCase();
             
-            // Add username
             const username = document.createElement('span');
             username.className = 'username';
-            username.textContent = userId === this.userId ? 'You' : `User ${userId.slice(0, 4)}`;
+            username.textContent = userData.username;
             
-            // Add speaking indicator
             const speakingIndicator = document.createElement('div');
             speakingIndicator.className = 'speaking-indicator';
             
@@ -143,7 +168,8 @@ class WebRTCHandler {
         // Join the channel
         this.socket.emit('join-channel', {
             channelId: channelId,
-            userId: this.userId
+            userId: this.userId,
+            username: this.username
         });
 
         // Request current users in channel
@@ -152,7 +178,10 @@ class WebRTCHandler {
         });
 
         // Update UI immediately to show you're in the channel
-        this.usersInChannel.add(this.userId);
+        this.usersInChannel.set(this.userId, {
+            id: this.userId,
+            username: this.username
+        });
         this.updateUsersList();
 
         // Update connection status
