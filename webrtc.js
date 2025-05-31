@@ -3,134 +3,183 @@ const configuration = {
     iceServers: [
         {
             urls: 'stun:stun.l.google.com:19302'
+        },
+        {
+            urls: 'stun:stun1.l.google.com:19302'
+        },
+        {
+            urls: 'stun:stun2.l.google.com:19302'
+        },
+        {
+            urls: 'stun:stun3.l.google.com:19302'
+        },
+        {
+            urls: 'stun:stun4.l.google.com:19302'
         }
-    ]
+    ],
+    iceCandidatePoolSize: 10
 };
 
 class WebRTCHandler {
-    constructor() {
+    constructor(userId) {
+        this.userId = userId;
+        this.peers = {};
         this.localStream = null;
-        this.peerConnections = {};
         this.currentChannel = null;
-        this.isMuted = false;
-        this.isConnected = false;
-
-        // DOM Elements
-        this.joinBtn = document.getElementById('joinChannelBtn');
-        this.leaveBtn = document.getElementById('leaveChannelBtn');
-        this.muteBtn = document.getElementById('muteBtn');
-        this.statusIndicator = document.querySelector('.status-indicator');
-        this.connectionStatus = document.getElementById('connectionStatus');
-        this.usersList = document.getElementById('usersList');
-
-        // Bind event listeners
-        this.joinBtn.addEventListener('click', () => this.joinChannel());
-        this.leaveBtn.addEventListener('click', () => this.leaveChannel());
-        this.muteBtn.addEventListener('click', () => this.toggleMute());
-
-        // Initialize Supabase realtime subscription
-        this.initializeRealtime();
+        this.socket = io(window.location.origin, {
+            transports: ['websocket'],
+            upgrade: false,
+            reconnection: true,
+            reconnectionAttempts: 5,
+            reconnectionDelay: 1000
+        });
+        this.usersInChannel = new Set();
+        this.initializeSocketListeners();
     }
 
-    async initializeRealtime() {
-        const channel = supabase.channel('webrtc');
-        
-        channel.on('broadcast', { event: 'signal' }, ({ payload }) => {
-            this.handleSignaling(payload);
+    async initialize() {
+        try {
+            this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            console.log('Local stream initialized');
+        } catch (error) {
+            console.error('Error accessing microphone:', error);
+        }
+    }
+
+    initializeSocketListeners() {
+        this.socket.on('connect', () => {
+            console.log('Connected to signaling server');
         });
 
-        await channel.subscribe();
+        this.socket.on('user-joined', async (data) => {
+            if (data.channelId === this.currentChannel) {
+                console.log('User joined:', data.userId);
+                this.usersInChannel.add(data.userId);
+                this.updateUsersList();
+                await this.createPeerConnection(data.userId);
+            }
+        });
+
+        this.socket.on('user-left', (data) => {
+            if (data.channelId === this.currentChannel) {
+                console.log('User left:', data.userId);
+                this.usersInChannel.delete(data.userId);
+                this.updateUsersList();
+                this.removePeer(data.userId);
+            }
+        });
+
+        this.socket.on('channel-users', (data) => {
+            if (data.channelId === this.currentChannel) {
+                this.usersInChannel = new Set(data.users);
+                this.updateUsersList();
+            }
+        });
+
+        this.socket.on('signal', async (data) => {
+            if (data.channelId === this.currentChannel) {
+                console.log('Received signal from:', data.from);
+                await this.handleSignal(data);
+            }
+        });
     }
 
-    async joinChannel() {
-        try {
-            // Get user media
-            this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    updateUsersList() {
+        const usersList = document.getElementById('usersList');
+        if (!usersList) return;
+
+        usersList.innerHTML = '';
+        this.usersInChannel.forEach(userId => {
+            const userCard = document.createElement('div');
+            userCard.className = 'user-card';
+            userCard.dataset.userId = userId;
             
-            // Update UI
-            this.joinBtn.disabled = true;
-            this.leaveBtn.disabled = false;
-            this.muteBtn.disabled = false;
-            this.statusIndicator.classList.add('connected');
-            this.connectionStatus.textContent = 'Connected';
-            this.isConnected = true;
+            // Add user avatar/icon
+            const userIcon = document.createElement('div');
+            userIcon.className = 'user-icon';
+            userIcon.textContent = userId.charAt(0).toUpperCase();
+            
+            // Add username
+            const username = document.createElement('span');
+            username.className = 'username';
+            username.textContent = userId === this.userId ? 'You' : `User ${userId.slice(0, 4)}`;
+            
+            // Add speaking indicator
+            const speakingIndicator = document.createElement('div');
+            speakingIndicator.className = 'speaking-indicator';
+            
+            userCard.appendChild(userIcon);
+            userCard.appendChild(username);
+            userCard.appendChild(speakingIndicator);
+            usersList.appendChild(userCard);
+        });
+    }
 
-            // Get existing users in channel
-            const { data: users } = await supabase
-                .from('channel_users')
-                .select('user_id')
-                .eq('channel_id', this.currentChannel);
-
-            // Create peer connections for existing users
-            for (const user of users) {
-                if (user.user_id !== supabase.auth.user().id) {
-                    this.createPeerConnection(user.user_id);
-                }
-            }
-
-            // Add user to channel_users
-            await supabase
-                .from('channel_users')
-                .insert([
-                    {
-                        user_id: supabase.auth.user().id,
-                        channel_id: this.currentChannel
-                    }
-                ]);
-
-        } catch (error) {
-            console.error('Error joining channel:', error);
-            alert('Failed to join channel. Please check your microphone permissions.');
+    async setCurrentChannel(channelId) {
+        if (this.currentChannel) {
+            await this.leaveChannel();
         }
+        
+        this.currentChannel = channelId;
+        console.log('Joining channel:', channelId);
+        
+        // Join the channel
+        this.socket.emit('join-channel', {
+            channelId: channelId,
+            userId: this.userId
+        });
+
+        // Request current users in channel
+        this.socket.emit('get-channel-users', {
+            channelId: channelId
+        });
+
+        // Update UI immediately to show you're in the channel
+        this.usersInChannel.add(this.userId);
+        this.updateUsersList();
+
+        // Update connection status
+        const statusIndicator = document.querySelector('.status-indicator');
+        const connectionStatus = document.getElementById('connectionStatus');
+        if (statusIndicator) statusIndicator.classList.add('connected');
+        if (connectionStatus) connectionStatus.textContent = 'Connected';
     }
 
     async leaveChannel() {
-        try {
-            // Stop all tracks
-            if (this.localStream) {
-                this.localStream.getTracks().forEach(track => track.stop());
-            }
+        if (!this.currentChannel) return;
 
-            // Close all peer connections
-            Object.values(this.peerConnections).forEach(pc => pc.close());
-            this.peerConnections = {};
+        console.log('Leaving channel:', this.currentChannel);
+        
+        // Notify server
+        this.socket.emit('leave-channel', {
+            channelId: this.currentChannel,
+            userId: this.userId
+        });
 
-            // Remove user from channel_users
-            await supabase
-                .from('channel_users')
-                .delete()
-                .match({
-                    user_id: supabase.auth.user().id,
-                    channel_id: this.currentChannel
-                });
+        // Close all peer connections
+        Object.values(this.peers).forEach(peer => {
+            peer.close();
+        });
+        this.peers = {};
+        this.usersInChannel.clear();
 
-            // Update UI
-            this.joinBtn.disabled = false;
-            this.leaveBtn.disabled = true;
-            this.muteBtn.disabled = true;
-            this.statusIndicator.classList.remove('connected');
-            this.connectionStatus.textContent = 'Disconnected';
-            this.isConnected = false;
-            this.usersList.innerHTML = '';
-
-        } catch (error) {
-            console.error('Error leaving channel:', error);
+        // Update UI
+        const currentChannelName = document.getElementById('currentChannelName');
+        if (currentChannelName) {
+            currentChannelName.textContent = 'No Channel Selected';
         }
+
+        const usersList = document.getElementById('usersList');
+        if (usersList) {
+            usersList.innerHTML = '';
+        }
+
+        this.currentChannel = null;
     }
 
-    toggleMute() {
-        if (this.localStream) {
-            this.isMuted = !this.isMuted;
-            this.localStream.getAudioTracks().forEach(track => {
-                track.enabled = !this.isMuted;
-            });
-            this.muteBtn.querySelector('.btn-text').textContent = this.isMuted ? 'Unmute' : 'Mute';
-        }
-    }
-
-    createPeerConnection(userId) {
+    async createPeerConnection(userId) {
         const peerConnection = new RTCPeerConnection(configuration);
-        this.peerConnections[userId] = peerConnection;
+        this.peers[userId] = peerConnection;
 
         // Add local stream
         this.localStream.getTracks().forEach(track => {
@@ -143,7 +192,8 @@ class WebRTCHandler {
                 this.sendSignal({
                     type: 'candidate',
                     candidate: event.candidate,
-                    to: userId
+                    to: userId,
+                    channelId: this.currentChannel
                 });
             }
         };
@@ -169,35 +219,40 @@ class WebRTCHandler {
                 this.sendSignal({
                     type: 'offer',
                     sdp: peerConnection.localDescription,
-                    to: userId
+                    to: userId,
+                    channelId: this.currentChannel
                 });
             });
 
         return peerConnection;
     }
 
-    async handleSignaling(signal) {
-        const { type, from, sdp, candidate } = signal;
+    async handleSignal(signal) {
+        const { type, from, sdp, candidate, channelId } = signal;
+
+        // Only process signals for current channel
+        if (channelId !== this.currentChannel) return;
 
         if (type === 'offer') {
-            const peerConnection = this.createPeerConnection(from);
+            const peerConnection = await this.createPeerConnection(from);
             await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
             const answer = await peerConnection.createAnswer();
             await peerConnection.setLocalDescription(answer);
             this.sendSignal({
                 type: 'answer',
                 sdp: answer,
-                to: from
+                to: from,
+                channelId: this.currentChannel
             });
         }
         else if (type === 'answer') {
-            const peerConnection = this.peerConnections[from];
+            const peerConnection = this.peers[from];
             if (peerConnection) {
                 await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
             }
         }
         else if (type === 'candidate') {
-            const peerConnection = this.peerConnections[from];
+            const peerConnection = this.peers[from];
             if (peerConnection) {
                 await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
             }
@@ -205,24 +260,16 @@ class WebRTCHandler {
     }
 
     sendSignal(signal) {
-        supabase.channel('webrtc').send({
-            type: 'broadcast',
-            event: 'signal',
-            payload: {
-                ...signal,
-                from: supabase.auth.user().id
-            }
-        });
+        this.socket.emit('signal', signal);
     }
 
-    setCurrentChannel(channelId) {
-        this.currentChannel = channelId;
-        this.joinBtn.disabled = false;
+    removePeer(userId) {
+        if (this.peers[userId]) {
+            this.peers[userId].close();
+            delete this.peers[userId];
+        }
     }
 }
 
-// Initialize WebRTC handler
-const webrtcHandler = new WebRTCHandler();
-
-// Export for use in app.js
-window.webrtcHandler = webrtcHandler; 
+// Export the class for use in app.js
+window.WebRTCHandler = WebRTCHandler; 

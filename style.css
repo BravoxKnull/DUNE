@@ -353,24 +353,55 @@ input:focus + .input-glow {
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     gap: 1rem;
     padding: 1rem;
-    background-color: rgba(0, 243, 255, 0.05);
-    border-radius: 5px;
-    border: 1px solid rgba(0, 243, 255, 0.1);
 }
 
 .user-card {
-    padding: 1rem;
-    background-color: rgba(0, 243, 255, 0.05);
-    border: 1px solid rgba(0, 243, 255, 0.1);
-    border-radius: 5px;
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    padding: 0.75rem;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    transition: all 0.3s ease;
 }
 
-.user-card.speaking {
-    border-color: var(--primary-color);
-    box-shadow: 0 0 10px var(--primary-color);
+.user-card:hover {
+    background: rgba(255, 255, 255, 0.1);
+    transform: translateY(-2px);
+}
+
+.user-icon {
+    width: 32px;
+    height: 32px;
+    background: linear-gradient(45deg, #ff6b6b, #ff8e8e);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-weight: bold;
+    font-size: 1.2rem;
+}
+
+.username {
+    color: #fff;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.speaking-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.3);
+    margin-left: auto;
+    transition: all 0.3s ease;
+}
+
+.user-card.speaking .speaking-indicator {
+    background: #4CAF50;
+    box-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
 }
 
 /* Modal Styles */

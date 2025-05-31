@@ -6,10 +6,25 @@
     <title>DUNE - Dashboard</title>
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Load Supabase first -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <!-- Then load Socket.io -->
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+    <!-- Then load our app -->
+    <script src="app.js" defer></script>
 </head>
 <body class="dashboard-body">
-    <div class="dashboard-container">
+    <!-- Auth Container -->
+    <div id="auth-container" class="auth-container" style="display: none;">
+        <div class="auth-box">
+            <h1>DUNE</h1>
+            <p>Please log in to continue</p>
+            <a href="index.html" class="glow-btn">Go to Login</a>
+        </div>
+    </div>
+
+    <!-- Dashboard Container -->
+    <div id="dashboard-container" class="dashboard-container" style="display: none;">
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="logo">
@@ -75,7 +90,6 @@
         </div>
     </div>
 
-    <script src="app.js"></script>
     <script src="webrtc.js"></script>
 </body>
 </html> 
