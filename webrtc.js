@@ -82,7 +82,7 @@ class WebRTCHandler {
                 
                 // Calculate average volume
                 const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
-                const isSpeaking = average > 20; // Adjust threshold as needed
+                const isSpeaking = average > 15; // Lowered threshold for better sensitivity
                 
                 // Update speaking indicator
                 const userCard = document.querySelector(`[data-user-id="${userId}"]`);
@@ -338,6 +338,7 @@ class WebRTCHandler {
                 audioElement.id = `audio-${userId}`;
                 audioElement.autoplay = true;
                 audioElement.playsInline = true;
+                audioElement.volume = 1.0; // Ensure volume is at maximum
                 document.body.appendChild(audioElement);
             }
             
@@ -359,6 +360,28 @@ class WebRTCHandler {
                     console.error('Error playing audio:', error);
                 });
             };
+
+            // Monitor audio levels for speaking indicator
+            const updateSpeakingIndicator = () => {
+                const dataArray = new Uint8Array(analyzer.frequencyBinCount);
+                analyzer.getByteFrequencyData(dataArray);
+                const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+                const isSpeaking = average > 15;
+
+                const userCard = document.querySelector(`[data-user-id="${userId}"]`);
+                if (userCard) {
+                    const indicator = userCard.querySelector('.speaking-indicator');
+                    if (indicator) {
+                        if (isSpeaking) {
+                            indicator.classList.add('active');
+                        } else {
+                            indicator.classList.remove('active');
+                        }
+                    }
+                }
+                requestAnimationFrame(updateSpeakingIndicator);
+            };
+            updateSpeakingIndicator();
         };
 
         return peerConnection;
