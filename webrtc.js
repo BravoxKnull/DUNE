@@ -78,7 +78,7 @@ class WebRTCHandler {
                 // Create peer connections for all users in the channel
                 data.users.forEach(userId => {
                     if (userId !== this.userId && !this.peers[userId]) {
-                        this.createPeerConnection(userId);
+                        this.initiateCall(userId);
                     }
                 });
             }
@@ -188,13 +188,21 @@ class WebRTCHandler {
     }
 
     async createPeerConnection(userId) {
+        if (this.peers[userId]) {
+            console.log('Peer connection already exists for:', userId);
+            return this.peers[userId];
+        }
+
+        console.log('Creating peer connection for:', userId);
         const peerConnection = new RTCPeerConnection(configuration);
         this.peers[userId] = peerConnection;
 
         // Add local stream
-        this.localStream.getTracks().forEach(track => {
-            peerConnection.addTrack(track, this.localStream);
-        });
+        if (this.localStream) {
+            this.localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, this.localStream);
+            });
+        }
 
         // Handle ICE candidates
         peerConnection.onicecandidate = (event) => {
@@ -208,8 +216,19 @@ class WebRTCHandler {
             }
         };
 
+        // Handle connection state changes
+        peerConnection.onconnectionstatechange = () => {
+            console.log(`Connection state with ${userId}:`, peerConnection.connectionState);
+        };
+
+        // Handle ICE connection state changes
+        peerConnection.oniceconnectionstatechange = () => {
+            console.log(`ICE connection state with ${userId}:`, peerConnection.iceConnectionState);
+        };
+
         // Handle incoming tracks
         peerConnection.ontrack = (event) => {
+            console.log('Received track from:', userId);
             const audioElement = document.createElement('audio');
             audioElement.srcObject = event.streams[0];
             audioElement.autoplay = true;
@@ -222,18 +241,6 @@ class WebRTCHandler {
             }
         };
 
-        // Create and send offer
-        peerConnection.createOffer()
-            .then(offer => peerConnection.setLocalDescription(offer))
-            .then(() => {
-                this.sendSignal({
-                    type: 'offer',
-                    sdp: peerConnection.localDescription,
-                    to: userId,
-                    channelId: this.currentChannel
-                });
-            });
-
         return peerConnection;
     }
 
@@ -243,29 +250,63 @@ class WebRTCHandler {
         // Only process signals for current channel
         if (channelId !== this.currentChannel) return;
 
-        if (type === 'offer') {
-            const peerConnection = await this.createPeerConnection(from);
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
+        console.log('Handling signal:', type, 'from:', from);
+
+        try {
+            if (type === 'offer') {
+                const peerConnection = await this.createPeerConnection(from);
+                
+                // Set remote description first
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+                
+                // Create and set local description
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                
+                this.sendSignal({
+                    type: 'answer',
+                    sdp: answer,
+                    to: from,
+                    channelId: this.currentChannel
+                });
+            }
+            else if (type === 'answer') {
+                const peerConnection = this.peers[from];
+                if (peerConnection && peerConnection.signalingState === 'have-local-offer') {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+                }
+            }
+            else if (type === 'candidate') {
+                const peerConnection = this.peers[from];
+                if (peerConnection) {
+                    try {
+                        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                    } catch (error) {
+                        console.error('Error adding ICE candidate:', error);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error handling signal:', error);
+        }
+    }
+
+    async initiateCall(userId) {
+        console.log('Initiating call with:', userId);
+        const peerConnection = await this.createPeerConnection(userId);
+        
+        try {
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            
             this.sendSignal({
-                type: 'answer',
-                sdp: answer,
-                to: from,
+                type: 'offer',
+                sdp: offer,
+                to: userId,
                 channelId: this.currentChannel
             });
-        }
-        else if (type === 'answer') {
-            const peerConnection = this.peers[from];
-            if (peerConnection) {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
-            }
-        }
-        else if (type === 'candidate') {
-            const peerConnection = this.peers[from];
-            if (peerConnection) {
-                await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-            }
+        } catch (error) {
+            console.error('Error creating offer:', error);
         }
     }
 
